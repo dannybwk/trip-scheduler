@@ -1,7 +1,9 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Plus, Calendar as CalendarIcon, Share2, Check } from 'lucide-react';
+import { ref, set, remove, onValue } from 'firebase/database';
+import { database } from './firebase';
 import { DAYS, START_HOUR, HOUR_HEIGHT, MINUTE_SNAP, INITIAL_EVENTS } from './constants';
-import { timeToDecimal, decimalToTime, encodeEvents, decodeEvents } from './utils';
+import { timeToDecimal, decimalToTime } from './utils';
 import { useDragEvent } from './hooks/useDragEvent';
 import CalendarGrid from './components/CalendarGrid';
 import EventList from './components/EventList';
@@ -9,46 +11,100 @@ import EventModal from './components/EventModal';
 
 const STORAGE_KEY = 'trip-events';
 
-function loadEvents() {
-  // 優先從 URL hash 載入
+function generateRoomId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let id = '';
+  for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+function getRoomId() {
   const hash = window.location.hash.slice(1);
-  if (hash) {
-    const fromUrl = decodeEvents(hash);
-    if (fromUrl) return fromUrl;
-  }
-  // 其次從 localStorage
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
+  if (hash && /^[a-z0-9]{4,12}$/.test(hash)) return hash;
   return null;
 }
 
 export default function App() {
-  const [events, setEvents] = useState(() => loadEvents() || INITIAL_EVENTS);
+  const [events, setEvents] = useState([]);
+  const [roomId, setRoomId] = useState(null);
   const [shared, setShared] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
 
   const gridRef = useRef(null);
   const lastDragEnd = useRef(0);
-  const { dragState, handlePointerDown } = useDragEvent(gridRef, setEvents, lastDragEnd);
+  const isFirebaseUpdate = useRef(false);
 
-  // localStorage 持久化
+  // --- Firebase: 寫入單一事件 ---
+  const writeEvent = useCallback((rid, event) => {
+    const { isNew, ...data } = event;
+    set(ref(database, `trips/${rid}/events/${data.id}`), data);
+  }, []);
+
+  const removeEvent = useCallback((rid, eventId) => {
+    remove(ref(database, `trips/${rid}/events/${eventId}`));
+  }, []);
+
+  // --- 拖曳結束回呼 ---
+  const handleDragUpdate = useCallback((updatedEvent) => {
+    if (roomId) {
+      writeEvent(roomId, updatedEvent);
+    }
+  }, [roomId, writeEvent]);
+
+  const { dragState, handlePointerDown } = useDragEvent(gridRef, setEvents, lastDragEnd, handleDragUpdate);
+
+  // --- 初始化房間 + Firebase 監聽 ---
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+    let existingRoomId = getRoomId();
+
+    if (!existingRoomId) {
+      // 建立新房間
+      existingRoomId = generateRoomId();
+      window.location.hash = existingRoomId;
+
+      // 用 localStorage 資料或初始資料建房
+      let initialEvents = INITIAL_EVENTS;
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) initialEvents = JSON.parse(raw);
+      } catch { /* ignore */ }
+
+      // 寫入 Firebase
+      const eventsObj = {};
+      initialEvents.forEach(ev => { eventsObj[ev.id] = ev; });
+      set(ref(database, `trips/${existingRoomId}/events`), eventsObj);
+    }
+
+    setRoomId(existingRoomId);
+
+    // 訂閱 Firebase
+    const eventsRef = ref(database, `trips/${existingRoomId}/events`);
+    const unsubscribe = onValue(eventsRef, (snapshot) => {
+      const data = snapshot.val();
+      const list = data ? Object.values(data) : [];
+      isFirebaseUpdate.current = true;
+      setEvents(list);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // localStorage 備份（僅在非 Firebase 觸發時寫入，避免多餘寫入也無妨）
+  useEffect(() => {
+    if (events.length > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
+    }
   }, [events]);
 
   // --- 表單處理 ---
   const handleOpenModal = (event = null, defaults = null) => {
     if (event && !event.isNew) {
-      // 編輯既有事件
       setEditingEvent({ ...event, isNew: false });
     } else {
-      // 新增事件，可帶入預設 day/start
       const start = defaults?.start || '10:00';
       const startDec = timeToDecimal(start);
-      const endDec = startDec + 2; // 預設 2 小時
+      const endDec = startDec + 2;
       setEditingEvent({
         id: Date.now().toString(),
         title: '',
@@ -65,61 +121,53 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  // 點擊行事曆空白處 → 新增事件，自動帶入日期與時間
   const handleGridClick = (e) => {
-    // 拖曳剛結束，忽略這次 click
     if (Date.now() - lastDragEnd.current < 200) return;
     if (!gridRef.current) return;
     const rect = gridRef.current.getBoundingClientRect();
     const relativeX = e.clientX - rect.left;
     const relativeY = e.clientY - rect.top;
 
-    // 計算天數
     const columnWidth = rect.width / 7;
     const dayIndex = Math.max(0, Math.min(Math.floor(relativeX / columnWidth), 6));
     const day = DAYS[dayIndex].id;
 
-    // 計算時間，吸附到 MINUTE_SNAP
     let startDecimal = (relativeY / HOUR_HEIGHT) + START_HOUR;
     const snap = MINUTE_SNAP / 60;
     startDecimal = Math.round(startDecimal / snap) * snap;
-    startDecimal = Math.max(START_HOUR, Math.min(startDecimal, START_HOUR + 22)); // 留空間給 2hr
+    startDecimal = Math.max(START_HOUR, Math.min(startDecimal, START_HOUR + 22));
     const start = decimalToTime(startDecimal >= 24 ? startDecimal - 24 : startDecimal);
 
     handleOpenModal(null, { day, start });
   };
 
   const handleSaveEvent = (savedEvent) => {
-    // Strip the isNew flag before saving
     const { isNew, ...eventData } = savedEvent;
-    if (isNew) {
-      setEvents(prev => [...prev, eventData]);
-    } else {
-      setEvents(prev => prev.map(e => e.id === eventData.id ? eventData : e));
+    if (roomId) {
+      writeEvent(roomId, eventData);
     }
     setIsModalOpen(false);
   };
 
   const handleDeleteEvent = (id) => {
-    setEvents(prev => prev.filter(e => e.id !== id));
+    if (roomId) {
+      removeEvent(roomId, id);
+    }
     setIsModalOpen(false);
   };
 
-  // --- 分享連結 ---
+  // --- 分享連結（只含 roomId）---
   const handleShare = async () => {
-    const encoded = encodeEvents(events);
-    const url = `${window.location.origin}${window.location.pathname}#${encoded}`;
+    const url = `${window.location.origin}${window.location.pathname}#${roomId}`;
     try {
       await navigator.clipboard.writeText(url);
       setShared(true);
       setTimeout(() => setShared(false), 2000);
     } catch {
-      // fallback
       prompt('複製此連結分享給朋友：', url);
     }
   };
 
-  // 排序事件供列表顯示
   const sortedEvents = useMemo(() => {
     return [...events].sort((a, b) => {
       if (a.day !== b.day) return a.day - b.day;
@@ -176,7 +224,7 @@ export default function App() {
           <EventList sortedEvents={sortedEvents} onOpenModal={handleOpenModal} />
         </div>
 
-        {/* Floating Action Button — fixed 定位避免被裁切 */}
+        {/* Floating Action Button */}
         <button
           onClick={() => handleOpenModal()}
           className="fixed bottom-8 right-8 w-14 h-14 bg-yellow-300 rounded-full flex items-center justify-center shadow-lg hover:bg-yellow-400 hover:scale-105 transition-all text-gray-800 z-50 focus:outline-none focus:ring-4 focus:ring-yellow-200"
