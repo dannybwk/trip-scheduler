@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Plus, Calendar as CalendarIcon, Share2, Check } from 'lucide-react';
+import { Plus, Calendar as CalendarIcon, Share2, Check, SlidersHorizontal } from 'lucide-react';
 import { ref, set, remove, onValue } from 'firebase/database';
 import { database } from './firebase';
-import { DAYS, START_HOUR, HOUR_HEIGHT, MINUTE_SNAP, INITIAL_EVENTS } from './constants';
+import { DAYS, HOUR_HEIGHT, MINUTE_SNAP, INITIAL_EVENTS } from './constants';
 import { timeToDecimal, decimalToTime } from './utils';
 import { useDragEvent } from './hooks/useDragEvent';
 import CalendarGrid from './components/CalendarGrid';
@@ -10,6 +10,7 @@ import EventList from './components/EventList';
 import EventModal from './components/EventModal';
 
 const STORAGE_KEY = 'trip-events';
+const DEFAULT_SETTINGS = { startHour: 9, endHour: 24, hiddenDays: [] };
 
 function generateRoomId() {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -27,15 +28,24 @@ function getRoomId() {
 export default function App() {
   const [events, setEvents] = useState([]);
   const [roomId, setRoomId] = useState(null);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [showSettings, setShowSettings] = useState(false);
   const [shared, setShared] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
 
   const gridRef = useRef(null);
   const lastDragEnd = useRef(0);
-  const isFirebaseUpdate = useRef(false);
 
-  // --- Firebase: 寫入單一事件 ---
+  // --- 計算可見天數與時數 ---
+  const visibleDays = useMemo(
+    () => DAYS.filter(d => !settings.hiddenDays.includes(d.id)),
+    [settings.hiddenDays]
+  );
+  const startHour = settings.startHour;
+  const totalHours = settings.endHour - settings.startHour;
+
+  // --- Firebase: 寫入 ---
   const writeEvent = useCallback((rid, event) => {
     const { isNew, ...data } = event;
     set(ref(database, `trips/${rid}/events/${data.id}`), data);
@@ -45,57 +55,85 @@ export default function App() {
     remove(ref(database, `trips/${rid}/events/${eventId}`));
   }, []);
 
+  const updateSettings = useCallback((newSettings) => {
+    if (roomId) {
+      set(ref(database, `trips/${roomId}/settings`), newSettings);
+    }
+  }, [roomId]);
+
   // --- 拖曳結束回呼 ---
   const handleDragUpdate = useCallback((updatedEvent) => {
-    if (roomId) {
-      writeEvent(roomId, updatedEvent);
-    }
+    if (roomId) writeEvent(roomId, updatedEvent);
   }, [roomId, writeEvent]);
 
-  const { dragState, handlePointerDown } = useDragEvent(gridRef, setEvents, lastDragEnd, handleDragUpdate);
+  const { dragState, handlePointerDown } = useDragEvent(
+    gridRef, setEvents, lastDragEnd, handleDragUpdate,
+    visibleDays, startHour, totalHours
+  );
 
   // --- 初始化房間 + Firebase 監聽 ---
   useEffect(() => {
     let existingRoomId = getRoomId();
 
     if (!existingRoomId) {
-      // 建立新房間
       existingRoomId = generateRoomId();
       window.location.hash = existingRoomId;
 
-      // 用 localStorage 資料或初始資料建房
       let initialEvents = INITIAL_EVENTS;
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) initialEvents = JSON.parse(raw);
       } catch { /* ignore */ }
 
-      // 寫入 Firebase
       const eventsObj = {};
       initialEvents.forEach(ev => { eventsObj[ev.id] = ev; });
       set(ref(database, `trips/${existingRoomId}/events`), eventsObj);
+      set(ref(database, `trips/${existingRoomId}/settings`), DEFAULT_SETTINGS);
     }
 
     setRoomId(existingRoomId);
 
-    // 訂閱 Firebase
+    // 訂閱 events
     const eventsRef = ref(database, `trips/${existingRoomId}/events`);
-    const unsubscribe = onValue(eventsRef, (snapshot) => {
+    const unsubEvents = onValue(eventsRef, (snapshot) => {
       const data = snapshot.val();
-      const list = data ? Object.values(data) : [];
-      isFirebaseUpdate.current = true;
-      setEvents(list);
+      setEvents(data ? Object.values(data) : []);
     });
 
-    return () => unsubscribe();
+    // 訂閱 settings
+    const settingsRef = ref(database, `trips/${existingRoomId}/settings`);
+    const unsubSettings = onValue(settingsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) setSettings({ ...DEFAULT_SETTINGS, ...data });
+    });
+
+    return () => { unsubEvents(); unsubSettings(); };
   }, []);
 
-  // localStorage 備份（僅在非 Firebase 觸發時寫入，避免多餘寫入也無妨）
+  // localStorage 備份
   useEffect(() => {
     if (events.length > 0) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
     }
   }, [events]);
+
+  // --- 設定操作 ---
+  const toggleDay = (dayId) => {
+    const hidden = settings.hiddenDays.includes(dayId)
+      ? settings.hiddenDays.filter(id => id !== dayId)
+      : [...settings.hiddenDays, dayId];
+    updateSettings({ ...settings, hiddenDays: hidden });
+  };
+
+  const changeStartHour = (h) => {
+    const newStart = Number(h);
+    if (newStart < settings.endHour) updateSettings({ ...settings, startHour: newStart });
+  };
+
+  const changeEndHour = (h) => {
+    const newEnd = Number(h);
+    if (newEnd > settings.startHour) updateSettings({ ...settings, endHour: newEnd });
+  };
 
   // --- 表單處理 ---
   const handleOpenModal = (event = null, defaults = null) => {
@@ -109,7 +147,7 @@ export default function App() {
         id: Date.now().toString(),
         title: '',
         category: 'ATTRACTION',
-        day: defaults?.day || 9,
+        day: defaults?.day || visibleDays[0]?.id || 9,
         start,
         end: decimalToTime(endDec >= 24 ? endDec - 24 : endDec),
         address: '',
@@ -128,14 +166,14 @@ export default function App() {
     const relativeX = e.clientX - rect.left;
     const relativeY = e.clientY - rect.top;
 
-    const columnWidth = rect.width / 7;
-    const dayIndex = Math.max(0, Math.min(Math.floor(relativeX / columnWidth), 6));
-    const day = DAYS[dayIndex].id;
+    const columnWidth = rect.width / visibleDays.length;
+    const dayIndex = Math.max(0, Math.min(Math.floor(relativeX / columnWidth), visibleDays.length - 1));
+    const day = visibleDays[dayIndex].id;
 
-    let startDecimal = (relativeY / HOUR_HEIGHT) + START_HOUR;
+    let startDecimal = (relativeY / HOUR_HEIGHT) + startHour;
     const snap = MINUTE_SNAP / 60;
     startDecimal = Math.round(startDecimal / snap) * snap;
-    startDecimal = Math.max(START_HOUR, Math.min(startDecimal, START_HOUR + 22));
+    startDecimal = Math.max(startHour, Math.min(startDecimal, startHour + totalHours - 2));
     const start = decimalToTime(startDecimal >= 24 ? startDecimal - 24 : startDecimal);
 
     handleOpenModal(null, { day, start });
@@ -143,27 +181,23 @@ export default function App() {
 
   const handleSaveEvent = (savedEvent) => {
     const { isNew, ...eventData } = savedEvent;
-    if (roomId) {
-      writeEvent(roomId, eventData);
-    }
+    if (roomId) writeEvent(roomId, eventData);
     setIsModalOpen(false);
   };
 
   const handleDeleteEvent = (id) => {
-    if (roomId) {
-      removeEvent(roomId, id);
-    }
+    if (roomId) removeEvent(roomId, id);
     setIsModalOpen(false);
   };
 
-  // --- 分享連結（只含 roomId）---
+  // --- 分享連結 ---
   const handleShare = async () => {
     const url = `${window.location.origin}${window.location.pathname}#${roomId}`;
     if (navigator.share) {
       try {
         await navigator.share({ title: '排排程', url });
         return;
-      } catch { /* 使用者取消，fallback 到複製 */ }
+      } catch { /* 使用者取消 */ }
     }
     try {
       await navigator.clipboard.writeText(url);
@@ -181,6 +215,9 @@ export default function App() {
     });
   }, [events]);
 
+  // 時間選項
+  const hourOptions = Array.from({ length: 25 }, (_, i) => i);
+
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800">
       <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col border border-gray-200 relative" style={{ height: '90vh' }}>
@@ -191,14 +228,65 @@ export default function App() {
             <CalendarIcon className="w-6 h-6 text-gray-600" />
             排排程
           </h1>
-          <button
-            onClick={handleShare}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${shared ? 'bg-green-100 text-green-700' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`}
-          >
-            {shared ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-            {shared ? '已複製' : '分享'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSettings(prev => !prev)}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${showSettings ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`}
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleShare}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${shared ? 'bg-green-100 text-green-700' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`}
+            >
+              {shared ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+              {shared ? '已複製' : '分享'}
+            </button>
+          </div>
         </div>
+
+        {/* Settings Bar */}
+        {showSettings && (
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex flex-wrap gap-x-6 gap-y-2 items-center text-sm">
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500 font-medium">天：</span>
+              {DAYS.map(day => {
+                const isHidden = settings.hiddenDays.includes(day.id);
+                return (
+                  <button
+                    key={day.id}
+                    onClick={() => toggleDay(day.id)}
+                    className={`px-2 py-0.5 rounded text-xs font-medium transition-all ${isHidden ? 'bg-gray-200 text-gray-400 line-through' : 'bg-blue-100 text-blue-700'}`}
+                  >
+                    {day.id}{day.name}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500 font-medium">時間：</span>
+              <select
+                value={settings.startHour}
+                onChange={(e) => changeStartHour(e.target.value)}
+                className="border border-gray-300 rounded px-1.5 py-0.5 text-xs bg-white"
+              >
+                {hourOptions.slice(0, 24).map(h => (
+                  <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                ))}
+              </select>
+              <span className="text-gray-400">—</span>
+              <select
+                value={settings.endHour}
+                onChange={(e) => changeEndHour(e.target.value)}
+                className="border border-gray-300 rounded px-1.5 py-0.5 text-xs bg-white"
+              >
+                {hourOptions.slice(1).map(h => (
+                  <option key={h} value={h}>{h === 24 ? '24:00' : `${String(h).padStart(2, '0')}:00`}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
 
         {/* Calendar Body (Scrollable) */}
         <div className="flex-1 overflow-y-auto relative bg-gray-50 flex flex-col">
@@ -206,8 +294,8 @@ export default function App() {
           {/* Day Headers (Sticky) */}
           <div className="flex sticky top-0 z-30 bg-gray-400 text-white shadow-sm">
             <div className="w-14 flex-shrink-0 border-r border-gray-300" />
-            <div className="flex-1 grid grid-cols-7">
-              {DAYS.map(day => (
+            <div className="flex-1 grid" style={{ gridTemplateColumns: `repeat(${visibleDays.length}, 1fr)` }}>
+              {visibleDays.map(day => (
                 <div key={day.id} className="text-center py-2 font-medium border-r border-gray-300 last:border-r-0">
                   <div className="text-lg">{day.id}</div>
                   <div className="text-xs opacity-90">{day.name}</div>
@@ -224,6 +312,9 @@ export default function App() {
             onPointerDown={handlePointerDown}
             onOpenModal={handleOpenModal}
             onGridClick={handleGridClick}
+            visibleDays={visibleDays}
+            startHour={startHour}
+            totalHours={totalHours}
           />
 
           {/* Bottom Event List */}
