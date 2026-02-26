@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Plus, Calendar as CalendarIcon } from 'lucide-react';
-import { DAYS, INITIAL_EVENTS } from './constants';
-import { timeToDecimal } from './utils';
+import { DAYS, START_HOUR, HOUR_HEIGHT, MINUTE_SNAP, INITIAL_EVENTS } from './constants';
+import { timeToDecimal, decimalToTime } from './utils';
 import { useDragEvent } from './hooks/useDragEvent';
 import CalendarGrid from './components/CalendarGrid';
 import EventList from './components/EventList';
@@ -31,17 +31,22 @@ export default function App() {
   }, [events]);
 
   // --- 表單處理 ---
-  const handleOpenModal = (event = null) => {
-    if (event) {
+  const handleOpenModal = (event = null, defaults = null) => {
+    if (event && !event.isNew) {
+      // 編輯既有事件
       setEditingEvent({ ...event, isNew: false });
     } else {
+      // 新增事件，可帶入預設 day/start
+      const start = defaults?.start || '10:00';
+      const startDec = timeToDecimal(start);
+      const endDec = startDec + 2; // 預設 2 小時
       setEditingEvent({
         id: Date.now().toString(),
         title: '',
         category: 'ATTRACTION',
-        day: 9,
-        start: '10:00',
-        end: '12:00',
+        day: defaults?.day || 9,
+        start,
+        end: decimalToTime(endDec >= 24 ? endDec - 24 : endDec),
         address: '',
         notes: '',
         link: '',
@@ -49,6 +54,28 @@ export default function App() {
       });
     }
     setIsModalOpen(true);
+  };
+
+  // 點擊行事曆空白處 → 新增事件，自動帶入日期與時間
+  const handleGridClick = (e) => {
+    if (!gridRef.current) return;
+    const rect = gridRef.current.getBoundingClientRect();
+    const relativeX = e.clientX - rect.left;
+    const relativeY = e.clientY - rect.top;
+
+    // 計算天數
+    const columnWidth = rect.width / 7;
+    const dayIndex = Math.max(0, Math.min(Math.floor(relativeX / columnWidth), 6));
+    const day = DAYS[dayIndex].id;
+
+    // 計算時間，吸附到 MINUTE_SNAP
+    let startDecimal = (relativeY / HOUR_HEIGHT) + START_HOUR;
+    const snap = MINUTE_SNAP / 60;
+    startDecimal = Math.round(startDecimal / snap) * snap;
+    startDecimal = Math.max(START_HOUR, Math.min(startDecimal, START_HOUR + 22)); // 留空間給 2hr
+    const start = decimalToTime(startDecimal >= 24 ? startDecimal - 24 : startDecimal);
+
+    handleOpenModal(null, { day, start });
   };
 
   const handleSaveEvent = (savedEvent) => {
@@ -110,6 +137,7 @@ export default function App() {
             gridRef={gridRef}
             onPointerDown={handlePointerDown}
             onOpenModal={handleOpenModal}
+            onGridClick={handleGridClick}
           />
 
           {/* Bottom Event List */}

@@ -2,7 +2,7 @@ import React from 'react';
 import { DAYS, START_HOUR, TOTAL_HOURS, HOUR_HEIGHT } from '../constants';
 import EventBlock from './EventBlock';
 
-export default function CalendarGrid({ events, dragState, gridRef, onPointerDown, onOpenModal }) {
+export default function CalendarGrid({ events, dragState, gridRef, onPointerDown, onOpenModal, onGridClick }) {
   // 合併：正常事件 + 拖曳中的預覽
   const renderEvents = dragState?.isDragging
     ? [...events, dragState.event]
@@ -25,8 +25,9 @@ export default function CalendarGrid({ events, dragState, gridRef, onPointerDown
       {/* Events Grid Container */}
       <div
         ref={gridRef}
-        className="flex-1 relative"
+        className="flex-1 relative cursor-pointer"
         style={{ height: `${TOTAL_HOURS * HOUR_HEIGHT}px` }}
+        onClick={onGridClick}
       >
         {/* Grid Lines */}
         {Array.from({ length: TOTAL_HOURS }).map((_, i) => (

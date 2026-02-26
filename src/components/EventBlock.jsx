@@ -29,7 +29,8 @@ export default function EventBlock({ event, dragState, onPointerDown, onOpenModa
       style={{ top: `${top}px`, height: `${height}px`, left, width }}
     >
       <div
-        onClick={() => {
+        onClick={(e) => {
+          e.stopPropagation();
           if (dragState?.isDragging) return;
           onOpenModal(event);
         }}
