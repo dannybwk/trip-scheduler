@@ -159,6 +159,12 @@ export default function App() {
   // --- 分享連結（只含 roomId）---
   const handleShare = async () => {
     const url = `${window.location.origin}${window.location.pathname}#${roomId}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: '排排程', url });
+        return;
+      } catch { /* 使用者取消，fallback 到複製 */ }
+    }
     try {
       await navigator.clipboard.writeText(url);
       setShared(true);
