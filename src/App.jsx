@@ -118,7 +118,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto relative bg-gray-50 flex flex-col">
 
           {/* Day Headers (Sticky) */}
-          <div className="flex sticky top-0 z-10 bg-gray-400 text-white shadow-sm">
+          <div className="flex sticky top-0 z-30 bg-gray-400 text-white shadow-sm">
             <div className="w-14 flex-shrink-0 border-r border-gray-300" />
             <div className="flex-1 grid grid-cols-7">
               {DAYS.map(day => (
