@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Plus, Calendar as CalendarIcon } from 'lucide-react';
+import { Plus, Calendar as CalendarIcon, Share2, Check } from 'lucide-react';
 import { DAYS, START_HOUR, HOUR_HEIGHT, MINUTE_SNAP, INITIAL_EVENTS } from './constants';
-import { timeToDecimal, decimalToTime } from './utils';
+import { timeToDecimal, decimalToTime, encodeEvents, decodeEvents } from './utils';
 import { useDragEvent } from './hooks/useDragEvent';
 import CalendarGrid from './components/CalendarGrid';
 import EventList from './components/EventList';
@@ -10,6 +10,13 @@ import EventModal from './components/EventModal';
 const STORAGE_KEY = 'trip-events';
 
 function loadEvents() {
+  // 優先從 URL hash 載入
+  const hash = window.location.hash.slice(1);
+  if (hash) {
+    const fromUrl = decodeEvents(hash);
+    if (fromUrl) return fromUrl;
+  }
+  // 其次從 localStorage
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
@@ -19,6 +26,7 @@ function loadEvents() {
 
 export default function App() {
   const [events, setEvents] = useState(() => loadEvents() || INITIAL_EVENTS);
+  const [shared, setShared] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
 
@@ -97,6 +105,20 @@ export default function App() {
     setIsModalOpen(false);
   };
 
+  // --- 分享連結 ---
+  const handleShare = async () => {
+    const encoded = encodeEvents(events);
+    const url = `${window.location.origin}${window.location.pathname}#${encoded}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setShared(true);
+      setTimeout(() => setShared(false), 2000);
+    } catch {
+      // fallback
+      prompt('複製此連結分享給朋友：', url);
+    }
+  };
+
   // 排序事件供列表顯示
   const sortedEvents = useMemo(() => {
     return [...events].sort((a, b) => {
@@ -115,6 +137,13 @@ export default function App() {
             <CalendarIcon className="w-6 h-6 text-gray-600" />
             排排程
           </h1>
+          <button
+            onClick={handleShare}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${shared ? 'bg-green-100 text-green-700' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}`}
+          >
+            {shared ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+            {shared ? '已複製' : '分享'}
+          </button>
         </div>
 
         {/* Calendar Body (Scrollable) */}

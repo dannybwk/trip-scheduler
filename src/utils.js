@@ -20,3 +20,31 @@ export const normalizeEndTime = (startDecimal, endDecimal) => {
   }
   return endDecimal;
 };
+
+// --- 分享連結：壓縮 events 到 URL hash ---
+
+// 將 events 編碼成 URL-safe 的 base64 字串
+export function encodeEvents(events) {
+  const json = JSON.stringify(events);
+  const bytes = new TextEncoder().encode(json);
+  // 使用 CompressionStream 壓縮（同步用不了，改用簡易 UTF-16 編碼）
+  // 直接 btoa，對中文先做 percent-encode
+  const encoded = btoa(encodeURIComponent(json).replace(/%([0-9A-F]{2})/g, (_, p1) =>
+    String.fromCharCode(parseInt(p1, 16))
+  ));
+  return encoded;
+}
+
+// 從 base64 字串解碼回 events
+export function decodeEvents(str) {
+  try {
+    const json = decodeURIComponent(
+      atob(str).split('').map(c =>
+        '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+      ).join('')
+    );
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) return parsed;
+  } catch { /* ignore */ }
+  return null;
+}
