@@ -23,7 +23,8 @@ export default function App() {
   const [editingEvent, setEditingEvent] = useState(null);
 
   const gridRef = useRef(null);
-  const { dragState, handlePointerDown } = useDragEvent(gridRef, setEvents);
+  const lastDragEnd = useRef(0);
+  const { dragState, handlePointerDown } = useDragEvent(gridRef, setEvents, lastDragEnd);
 
   // localStorage 持久化
   useEffect(() => {
@@ -58,6 +59,8 @@ export default function App() {
 
   // 點擊行事曆空白處 → 新增事件，自動帶入日期與時間
   const handleGridClick = (e) => {
+    // 拖曳剛結束，忽略這次 click
+    if (Date.now() - lastDragEnd.current < 200) return;
     if (!gridRef.current) return;
     const rect = gridRef.current.getBoundingClientRect();
     const relativeX = e.clientX - rect.left;

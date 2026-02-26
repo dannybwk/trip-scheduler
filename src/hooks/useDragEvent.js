@@ -4,7 +4,7 @@ import { timeToDecimal, decimalToTime, normalizeEndTime } from '../utils';
 
 const DRAG_THRESHOLD = 5; // px — 移動超過此值才算拖曳
 
-export function useDragEvent(gridRef, setEvents) {
+export function useDragEvent(gridRef, setEvents, lastDragEnd) {
   const [dragState, setDragState] = useState(null);
 
   const handlePointerDown = useCallback((e, event) => {
@@ -74,6 +74,7 @@ export function useDragEvent(gridRef, setEvents) {
     const handlePointerUp = () => {
       if (dragState && dragState.isDragging) {
         setEvents(prev => prev.map(e => e.id === dragState.event.id ? dragState.event : e));
+        if (lastDragEnd) lastDragEnd.current = Date.now();
       }
       setDragState(null);
     };
