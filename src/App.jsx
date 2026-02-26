@@ -215,8 +215,10 @@ export default function App() {
     });
   }, [events]);
 
-  // 時間選項
-  const hourOptions = Array.from({ length: 25 }, (_, i) => i);
+  // 時間選項：起 5~23，訖 6~28（28 = 隔日 04:00）
+  const startHourOptions = Array.from({ length: 19 }, (_, i) => i + 5);  // 5..23
+  const endHourOptions = Array.from({ length: 23 }, (_, i) => i + 6);    // 6..28
+  const formatHour = (h) => h >= 24 ? `隔日 ${String(h - 24).padStart(2, '0')}:00` : `${String(h).padStart(2, '0')}:00`;
 
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800">
@@ -270,8 +272,8 @@ export default function App() {
                 onChange={(e) => changeStartHour(e.target.value)}
                 className="border border-gray-300 rounded px-1.5 py-0.5 text-xs bg-white"
               >
-                {hourOptions.slice(0, 24).map(h => (
-                  <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                {startHourOptions.map(h => (
+                  <option key={h} value={h}>{formatHour(h)}</option>
                 ))}
               </select>
               <span className="text-gray-400">—</span>
@@ -280,8 +282,8 @@ export default function App() {
                 onChange={(e) => changeEndHour(e.target.value)}
                 className="border border-gray-300 rounded px-1.5 py-0.5 text-xs bg-white"
               >
-                {hourOptions.slice(1).map(h => (
-                  <option key={h} value={h}>{h === 24 ? '24:00' : `${String(h).padStart(2, '0')}:00`}</option>
+                {endHourOptions.map(h => (
+                  <option key={h} value={h}>{formatHour(h)}</option>
                 ))}
               </select>
             </div>
